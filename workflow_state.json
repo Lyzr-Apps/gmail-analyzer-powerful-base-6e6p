@@ -1,0 +1,13 @@
+{
+  "agents": {
+    "gmail_analysis_agent": {
+      "agent_id": "69a02b4c8ded04faf8347c8f",
+      "name": "Gmail Analysis Agent",
+      "type": "single",
+      "model": "gpt-4.1",
+      "provider": "openai",
+      "has_tools": true,
+      "tools": ["GMAIL_FETCH_EMAILS"]
+    }
+  }
+}

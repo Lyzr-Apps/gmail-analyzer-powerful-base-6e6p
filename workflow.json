@@ -1,0 +1,32 @@
+{
+  "nodes": [
+    {
+      "id": "input_node",
+      "type": "Input",
+      "label": "User Email Filters",
+      "nodeCategory": "input"
+    },
+    {
+      "id": "gmail_analysis_agent",
+      "type": "Agent",
+      "label": "Gmail Analysis Agent",
+      "nodeCategory": "agent"
+    },
+    {
+      "id": "output_node",
+      "type": "Output",
+      "label": "Analysis Results",
+      "nodeCategory": "end"
+    }
+  ],
+  "edges": [
+    {
+      "source": "input_node",
+      "target": "gmail_analysis_agent"
+    },
+    {
+      "source": "gmail_analysis_agent",
+      "target": "output_node"
+    }
+  ]
+}

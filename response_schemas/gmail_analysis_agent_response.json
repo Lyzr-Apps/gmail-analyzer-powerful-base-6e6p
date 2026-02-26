@@ -1,0 +1,76 @@
+{
+  "agent_name": "Gmail Analysis Agent",
+  "agent_id": "69a02b4c8ded04faf8347c8f",
+  "description": "Fetches emails from Gmail based on user-defined filters, then analyzes them to produce summaries, sentiment analysis, priority categorization, and actionable recommendations",
+  "agent_type": "json",
+  "accessor": "result",
+  "auto_generated": true,
+  "response_schema": {
+    "total_emails": "number",
+    "priority_summary": {
+      "high": "number",
+      "medium": "number",
+      "low": "number"
+    },
+    "dominant_sentiment": "string",
+    "emails": [
+      {
+        "id": "string",
+        "thread_id": "string",
+        "sender": "string",
+        "sender_email": "string",
+        "subject": "string",
+        "date": "string",
+        "snippet": "string",
+        "summary": "string",
+        "sentiment": {
+          "label": "string",
+          "score": "number"
+        },
+        "priority": "string",
+        "action_items": [
+          "string"
+        ]
+      }
+    ],
+    "message": "string"
+  },
+  "example_response": {
+    "total_emails": 0,
+    "priority_summary": {
+      "high": 0,
+      "medium": 0,
+      "low": 0
+    },
+    "dominant_sentiment": "Most common sentiment: positive, neutral, or negative",
+    "emails": [
+      {
+        "id": "sample string",
+        "thread_id": "sample string",
+        "sender": "sample string",
+        "sender_email": "sample string",
+        "subject": "sample string",
+        "date": "sample string",
+        "snippet": "sample string",
+        "summary": "sample string",
+        "sentiment": {
+          "label": "sample string",
+          "score": 0
+        },
+        "priority": "sample string",
+        "action_items": [
+          "sample string"
+        ]
+      }
+    ],
+    "message": "Optional message when no emails found or additional context"
+  },
+  "has_module_outputs": true,
+  "module_outputs_example": {
+    "artifact_files": [
+      {
+        "file_url": "https://example.com/file.pdf"
+      }
+    ]
+  }
+}
