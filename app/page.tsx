@@ -513,6 +513,106 @@ export default function Page() {
     return sorted
   }, [displayData, priorityFilter, sortBy])
 
+  // ---------- Robust response extraction ----------
+  // The agent response passes through multiple layers:
+  //   Lyzr API -> route.ts (parseLLMJson + normalizeResponse) -> callAIAgent -> here
+  // The actual email data can be at various nesting levels depending on how
+  // normalizeResponse wrapped things. This function walks through all candidates.
+  const extractAnalysisData = useCallback((result: Record<string, unknown>): AnalysisResponse | null => {
+    // Helper: check if an object looks like our AnalysisResponse
+    const isAnalysis = (obj: unknown): obj is AnalysisResponse => {
+      if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return false
+      const o = obj as Record<string, unknown>
+      // Must have emails array OR total_emails field
+      return Array.isArray(o.emails) || typeof o.total_emails === 'number'
+    }
+
+    // Helper: try to parse a string as JSON and check if it's analysis data
+    const tryParseString = (val: unknown): AnalysisResponse | null => {
+      if (typeof val !== 'string') return null
+      try {
+        const p = parseLLMJson(val)
+        if (isAnalysis(p)) return p as AnalysisResponse
+        // parseLLMJson might return a wrapper; dig deeper
+        if (p && typeof p === 'object') {
+          if (isAnalysis((p as Record<string, unknown>).result)) return (p as Record<string, unknown>).result as AnalysisResponse
+          if (isAnalysis((p as Record<string, unknown>).response)) return (p as Record<string, unknown>).response as AnalysisResponse
+          if (isAnalysis((p as Record<string, unknown>).data)) return (p as Record<string, unknown>).data as AnalysisResponse
+        }
+      } catch { /* ignore */ }
+      return null
+    }
+
+    // Collect all candidate objects to check, in priority order
+    const candidates: unknown[] = []
+    const r = result as Record<string, unknown>
+    const response = r?.response as Record<string, unknown> | undefined
+    const responseResult = response?.result as Record<string, unknown> | undefined
+
+    // Level 1: result.response.result (most common path after normalizeResponse)
+    candidates.push(responseResult)
+    // Level 2: result.response.result.text (if normalizeResponse wrapped a string into {text})
+    candidates.push((responseResult as Record<string, unknown>)?.text)
+    // Level 3: result.response itself
+    candidates.push(response)
+    // Level 4: result.response.result.result (double-wrapped)
+    candidates.push((responseResult as Record<string, unknown>)?.result)
+    // Level 5: result.response.result.response (double-wrapped alt)
+    candidates.push((responseResult as Record<string, unknown>)?.response)
+    // Level 6: result.response.result.data
+    candidates.push((responseResult as Record<string, unknown>)?.data)
+    // Level 7: the raw_response string
+    candidates.push(r?.raw_response)
+    // Level 8: the top-level result itself
+    candidates.push(r)
+
+    for (const candidate of candidates) {
+      if (candidate == null) continue
+
+      // If it's already a matching object, return it
+      if (isAnalysis(candidate)) {
+        const c = candidate as Record<string, unknown>
+        return {
+          total_emails: typeof c.total_emails === 'number' ? c.total_emails : (Array.isArray(c.emails) ? c.emails.length : 0),
+          priority_summary: (c.priority_summary as PrioritySummary) ?? { high: 0, medium: 0, low: 0 },
+          dominant_sentiment: (c.dominant_sentiment as string) ?? 'neutral',
+          emails: Array.isArray(c.emails) ? c.emails : [],
+          message: (c.message as string) ?? '',
+        }
+      }
+
+      // If it's a string, try parsing it
+      if (typeof candidate === 'string' && candidate.trim().length > 2) {
+        const fromString = tryParseString(candidate)
+        if (fromString) return fromString
+      }
+
+      // If it's an object, check nested keys
+      if (typeof candidate === 'object' && !Array.isArray(candidate)) {
+        const obj = candidate as Record<string, unknown>
+        for (const key of ['result', 'response', 'data', 'output', 'content']) {
+          const nested = obj[key]
+          if (isAnalysis(nested)) {
+            const n = nested as Record<string, unknown>
+            return {
+              total_emails: typeof n.total_emails === 'number' ? n.total_emails : (Array.isArray(n.emails) ? n.emails.length : 0),
+              priority_summary: (n.priority_summary as PrioritySummary) ?? { high: 0, medium: 0, low: 0 },
+              dominant_sentiment: (n.dominant_sentiment as string) ?? 'neutral',
+              emails: Array.isArray(n.emails) ? n.emails : [],
+              message: (n.message as string) ?? '',
+            }
+          }
+          if (typeof nested === 'string' && nested.trim().length > 2) {
+            const fromNested = tryParseString(nested)
+            if (fromNested) return fromNested
+          }
+        }
+      }
+    }
+
+    return null
+  }, [])
+
   // Build message and call agent
   const handleAnalyze = useCallback(async () => {
     setAppState('loading')
@@ -536,15 +636,57 @@ export default function Page() {
       setActiveAgentId(null)
 
       if (result?.success) {
-        const parsed = parseLLMJson(result?.response?.result || result?.response)
-        if (parsed && !parsed?.error) {
-          setAnalysisData(parsed as AnalysisResponse)
-          setAppState('results')
-        } else if (parsed?.emails || parsed?.total_emails !== undefined) {
-          setAnalysisData(parsed as AnalysisResponse)
+        const analysisResult = extractAnalysisData(result as unknown as Record<string, unknown>)
+
+        if (analysisResult && (Array.isArray(analysisResult.emails) || typeof analysisResult.total_emails === 'number')) {
+          // Ensure emails array exists and each email has required fields with safe defaults
+          const safeEmails = Array.isArray(analysisResult.emails)
+            ? analysisResult.emails.map((email: Record<string, unknown>, idx: number) => ({
+                id: (email?.id as string) ?? `email-${idx}`,
+                thread_id: (email?.thread_id as string) ?? '',
+                sender: (email?.sender as string) ?? 'Unknown Sender',
+                sender_email: (email?.sender_email as string) ?? '',
+                subject: (email?.subject as string) ?? 'No Subject',
+                date: (email?.date as string) ?? '',
+                snippet: (email?.snippet as string) ?? '',
+                summary: (email?.summary as string) ?? '',
+                sentiment: {
+                  label: ((email?.sentiment as Record<string, unknown>)?.label as string) ?? 'neutral',
+                  score: typeof (email?.sentiment as Record<string, unknown>)?.score === 'number'
+                    ? (email.sentiment as Record<string, unknown>).score as number
+                    : 0.5,
+                },
+                priority: (email?.priority as string) ?? 'low',
+                action_items: Array.isArray(email?.action_items) ? email.action_items as string[] : [],
+              }))
+            : []
+
+          setAnalysisData({
+            total_emails: typeof analysisResult.total_emails === 'number'
+              ? analysisResult.total_emails
+              : safeEmails.length,
+            priority_summary: analysisResult.priority_summary ?? {
+              high: safeEmails.filter((e: AnalyzedEmail) => e.priority?.toLowerCase() === 'high').length,
+              medium: safeEmails.filter((e: AnalyzedEmail) => e.priority?.toLowerCase() === 'medium').length,
+              low: safeEmails.filter((e: AnalyzedEmail) => e.priority?.toLowerCase() === 'low').length,
+            },
+            dominant_sentiment: analysisResult.dominant_sentiment ?? 'neutral',
+            emails: safeEmails,
+            message: analysisResult.message ?? `Successfully analyzed ${safeEmails.length} emails.`,
+          })
           setAppState('results')
         } else {
-          setErrorMessage('Could not parse the analysis results. The agent may have returned an unexpected format.')
+          // Last resort: try to extract anything useful from raw_response
+          const rawStr = result?.raw_response
+          if (typeof rawStr === 'string' && rawStr.length > 10) {
+            const rawParsed = parseLLMJson(rawStr)
+            if (rawParsed && (Array.isArray(rawParsed?.emails) || typeof rawParsed?.total_emails === 'number')) {
+              setAnalysisData(rawParsed as AnalysisResponse)
+              setAppState('results')
+              return
+            }
+          }
+          setErrorMessage('Could not parse the analysis results. The agent may have returned an unexpected format. Please try again.')
           setAppState('error')
         }
       } else {
@@ -556,7 +698,7 @@ export default function Page() {
       setErrorMessage(err instanceof Error ? err.message : 'An unexpected error occurred.')
       setAppState('error')
     }
-  }, [filters])
+  }, [filters, extractAnalysisData])
 
   // Quick filter handler
   const handleQuickFilter = useCallback((query: string, label: string) => {
